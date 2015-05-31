@@ -8,7 +8,10 @@ import sys
 import argparse
 import math
 import re
-import pickle
+if sys.version_info[0] < 3:
+   import cPickle as pickle
+else:
+   import pickle
 
 # pyvcf
 # http://pyvcf.readthedocs.org/en/latest/API.html
@@ -287,9 +290,9 @@ def load_normal_vcf():
    global out_normal_vcf_dump
 
    # load dict_normal_snp
-   dict_normal_snp = pickle.load(open(out_normal_vcf_dump, "rb"))
+   dict_normal_snp = pickle.load(open(args.V, "rb"))
 
-   print "     Normal vcf dump file     : " + out_normal_vcf_dump
+   print "     Normal vcf dump file     : " + args.V
    print "     Loading a normal vcf dump: done\n"
    sys.stdout.flush()
 
@@ -358,9 +361,9 @@ def load_dbsnp_vcf():
    global out_dbsnp_vcf_dump
 
    # load dict_dbsnp_snp
-   dict_dbsnp_snp = pickle.load(open(out_dbsnp_vcf_dump, "rb"))
+   dict_dbsnp_snp = pickle.load(open(args.D, "rb"))
 
-   print "     dbSNP vcf dump file     : " + out_dbsnp_vcf_dump
+   print "     dbSNP vcf dump file     : " + args.D
    print "     Loading a dbSNP vcf dump: done\n"
    sys.stdout.flush()
 
@@ -603,16 +606,8 @@ def construct_confusion_matrix():
    fo_normal_bam.close()
    fo_ref_fasta.close()
 
-   # write theq matrix to a file
-   fo_matrix = open(out_matrix, "w")
-
-   for ref_base in ("A", "C", "G", "T"):
-      for called_base in ("A", "C", "G", "T"):
-         for index in range(0, max_qs):
-            fo_matrix.write(str(dict_confusion_matrix[ref_base][called_base][index]) + ",")
-         fo_matrix.write("\n")
-
-   fo_matrix.close()
+   # dump dict_confusion_matrix
+   pickle.dump(dict_confusion_matrix, open(out_matrix, "wb"))
 
    print "     Output matrix file  : " + out_matrix
    print "     Constructing the confusion matrix: done\n"
@@ -628,24 +623,9 @@ def read_confusion_matrix():
    sys.stdout.flush()
 
    global dict_confusion_matrix
-   global max_qs
 
-   # initialize a matrix
-   dict_confusion_matrix["A"] = {}
-   dict_confusion_matrix["C"] = {}
-   dict_confusion_matrix["G"] = {}
-   dict_confusion_matrix["T"] = {}
-
-   # write theq matrix to a file
-   fo_matrix = open(args.m, "r")
-
-   for ref_base in ("A", "C", "G", "T"):
-      for called_base in ("A", "C", "G", "T"):
-         matrix_row = fo_matrix.readline()
-         matrix_row = re.sub(",\s*$", "", matrix_row)
-         dict_confusion_matrix[ref_base][called_base] = map(int, matrix_row.split(","))
-
-   fo_matrix.close()
+   # load dict_confusion_matrix
+   dict_confusion_matrix = pickle.load(open(args.m, "rb"))
 
    print "     Matrix file: " + args.m
    print "     Reading a confusion matrix: done\n"

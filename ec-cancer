@@ -8,10 +8,13 @@ import sys
 import argparse
 import math
 import re
+import pickle
 
+# pyvcf
 # http://pyvcf.readthedocs.org/en/latest/API.html
 import vcf
 
+# pysam
 # http://pysam.readthedocs.org/en/latest/api.html
 import pysam
 
@@ -22,10 +25,10 @@ import pysam
 #--------------------------------------------------
 version            = "0.0"
 date               = "May 30, 2015"
-out_bam            = ""
 iter_size          = 1000000
 max_qs             = 80
 initial_likelihood = -1
+vcf_rpt_interval   = 10000
 
 # dictionary for snps
 dict_normal_snp       = {}
@@ -49,6 +52,8 @@ def parse_args():
    global date
    global out_bam
    global out_matrix
+   global out_normal_vcf_dump
+   global out_dbsnp_vcf_dump
 
    if len(sys.argv) == 1:
       print "USAGE: " + os.path.basename(sys.argv[0]) + " <options>"
@@ -57,11 +62,13 @@ def parse_args():
       print "ARGUMENT         DESCRIPTION               MANDATORY       DEFAULT"
       print "------------------------------------------------------------------------------"
       print "-b  <file>       tumor bam file            Y"
+      print "-D  <file>       dbsnp vcf dump file       N"
       print "-d  <file>       dbsnp vcf file            Y"
       print "-h               print help                N"
       print "-m  <file>       confusion matrix file     N"
       print "-n  <file>       normal bam file           Y"
       print "-p  <string>     output prefix             Y"
+      print "-V  <file>       normal vcf dump file      Y"
       print "-v  <file>       normal vcf file           Y"
       print "------------------------------------------------------------------------------"
       print ""
@@ -74,11 +81,13 @@ def parse_args():
 
    parser.add_argument('-b',  type=str)
    parser.add_argument('-c',  type=str)
+   parser.add_argument('-D',  type=str)
    parser.add_argument('-d',  type=str)
    parser.add_argument('-m',  type=str)
    parser.add_argument('-n',  type=str)
    parser.add_argument('-p',  type=str)
    parser.add_argument('-r',  type=str)
+   parser.add_argument('-V',  type=str)
    parser.add_argument('-v',  type=str)
 
    args = parser.parse_args()
@@ -95,8 +104,15 @@ def parse_args():
    elif os.path.isfile(args.b) == False:
       sys.exit("\nERROR: " + args.b + " does not exist\n")
 
+   if args.D != None:
+      if os.path.isfile(args.D) == False:
+         sys.exit("\nERROR: " + args.D + " does not exist\n")
+      elif args.d != None:
+         sys.exit("\nERROR: -D cannot be used with -d")
+
    if args.d == None:
-      sys.exit("\nERROR: A dbsnp vcf file is not specified\n")
+      if args.D == None:
+         sys.exit("\nERROR: -D or -d should be used\n")
    elif os.path.isfile(args.d) == False:
       sys.exit("\nERROR: " + args.d + " does not exist\n")
 
@@ -115,24 +131,41 @@ def parse_args():
    if args.p == None:
       sys.exit("\nERROR: An output file name prefix is not specified\n")
    else:
-      out_bam    = args.p + ".no-normal.bam"
-      out_matrix = args.p + ".matrix"
+      out_bam             = args.p + ".no-normal.bam"
+      out_matrix          = args.p + ".matrix"
+      out_normal_vcf_dump = args.p + ".normal-vcf.dump"
+      out_dbsnp_vcf_dump  = args.p + ".dbsnp-vcf.dump"
 
    if args.r == None:
       sys.exit("\nERROR: A reference fasta file is not specified\n")
    elif os.path.isfile(args.r) == False:
       sys.exit("\nERROR: " + args.r + " does not exist\n")
 
+   if args.V != None:
+      if os.path.isfile(args.V) == False:
+         sys.exit("\nERROR: " + args.V + " does not exist\n")
+      elif args.v != None:
+         sys.exit("\nERROR: -V cannot be used with -v")
+
    if args.v == None:
-      sys.exit("\nERROR: A GATK vcf file is not specified\n")
+      if args.V == None:
+         sys.exit("\nERROR: -V or -v should be used\n")
    elif os.path.isfile(args.v) == False:
       sys.exit("\nERROR: " + args.v + " does not exist\n")
 
    # print arguments
    print "     Normal bam file     : " + args.n
    print "     Tumor bam file      : " + args.b
-   print "     Normal vcf file     : " + args.v
-   print "     dbSNP vcf file      : " + args.d
+
+   if args.d == None:
+      print "     Normal vcf dump file: " + args.V
+   else:
+      print "     Normal vcf file     : " + args.v
+
+   if args.v == None:
+      print "     dbSNP vcf dump file : " + args.D
+   else:
+      print "     dbSNP vcf file      : " + args.d
    print "     Reference fasta file: " + args.r
    print "     Output bam file     : " + out_bam
    print "     Chromosome          : " + args.c
@@ -197,14 +230,20 @@ def read_normal_vcf():
    print "Reading a normal vcf"
    sys.stdout.flush()
 
-   global dict_normal_snp;
+   global dict_normal_snp
+   global out_normal_vcf_dump
 
    fo_vcf = vcf.Reader(open(args.v, "r"))
 
+   num_records = 0
+   num_snps    = 0
    for each_record in fo_vcf:
-      if each_record.is_snp:
-         # check the chromosome name
-         if each_record.CHROM == args.c:
+      # check the chromosome name
+      if each_record.CHROM == args.c:
+         num_records += 1
+         # check whether it is a snp
+         if each_record.is_snp:
+            num_snps += 1
             # each_record.CHROM was not previously added to dict_normal_snp
             if each_record.CHROM not in dict_normal_snp:
                dict_normal_snp[each_record.CHROM] = {};
@@ -213,6 +252,7 @@ def read_normal_vcf():
             # POS: 1-based (numbers in the vcf file)
             # ths position is converted to a 0-based number
             index = each_record.POS - 1
+            # having multiple records for a locus is not allowed for a normal vcf
             if index in dict_normal_snp[each_record.CHROM]:
                sys.exit("\nERROR: CHR " + each_record.CHROM + " POS: " + each_record.POS + " previously added\n")
             else:
@@ -220,7 +260,37 @@ def read_normal_vcf():
                dict_normal_snp[each_record.CHROM][index][0] = each_record.alleles[0]
                dict_normal_snp[each_record.CHROM][index][1] = each_record.alleles[1:]
 
+      # print the progress status
+      if (num_records % vcf_rpt_interval) == 0:
+         print "     {0:s}: {1:7d}".format(each_record.CHROM, num_records)
+         sys.stdout.flush()
+
+   # dump dict_normal_snp
+   pickle.dump(dict_normal_snp, open(out_normal_vcf_dump, "wb"))
+
+   print "     Number of records in {0:s}: {1:7d}".format(each_record.CHROM, num_records)
+   print "     Number of SNPs in {0:s}   : {1:7d}".format(each_record.CHROM, num_snps)
+   print "     Normal vcf dump file: " + out_normal_vcf_dump
    print "     Reading a normal vcf: done\n"
+   sys.stdout.flush()
+
+
+
+#--------------------------------------------------
+# FUNCTION: load_normal_vcf
+#--------------------------------------------------
+def load_normal_vcf():
+   print "Loading a normal vcf dump"
+   sys.stdout.flush()
+
+   global dict_normal_snp
+   global out_normal_vcf_dump
+
+   # load dict_normal_snp
+   dict_normal_snp = pickle.load(open(out_normal_vcf_dump, "rb"))
+
+   print "     Normal vcf dump file     : " + out_normal_vcf_dump
+   print "     Loading a normal vcf dump: done\n"
    sys.stdout.flush()
 
 
@@ -229,33 +299,69 @@ def read_normal_vcf():
 # FUNCTION: read_dbsnp_vcf
 #--------------------------------------------------
 def read_dbsnp_vcf():
-   print "Reading a dbsnp vcf"
+   print "Reading a dbSNP vcf"
+   sys.stdout.flush()
 
-   global dict_dbsnp_snp;
+   global dict_dbsnp_snp
+   global out_dbsnp_vcf_dump
 
    fo_vcf = vcf.Reader(open(args.d, "r"))
 
+   num_records = 0
+   num_snps    = 0
    for each_record in fo_vcf:
+      num_records += 1
       if each_record.is_snp:
-         # if you want to gather information from a specific chromosome
-         # add this
-         #if each_record.CHROM == args.c:
-            # each_record.CHROM was not previously added to dict_dbsnp_snp
-            if each_record.CHROM not in dict_dbsnp_snp:
-               dict_dbsnp_snp[each_record.CHROM] = {};
+         num_snps += 1
+         # each_record.CHROM was not previously added to dict_dbsnp_snp
+         if each_record.CHROM not in dict_dbsnp_snp:
+            dict_dbsnp_snp[each_record.CHROM] = {};
 
-            # snps in the position already exist in the dictionary
-            # POS: 1-based (numbers in the vcf file)
-            # ths position is converted to a 0-based number
-            index = each_record.POS - 1
-            if index in dict_dbsnp_snp[each_record.CHROM]:
-               sys.exit("\nERROR: CHR " + each_record.CHROM + " POS: " + each_record.POS + " previously added\n")
-            else:
-               dict_dbsnp_snp[each_record.CHROM][index] = {}
-               dict_dbsnp_snp[each_record.CHROM][index][0] = each_record.alleles[0]
-               dict_dbsnp_snp[each_record.CHROM][index][1] = each_record.alleles[1:]
+         # snps in the position already exist in the dictionary
+         # POS: 1-based (numbers in the vcf file)
+         # ths position is converted to a 0-based number
+         index = each_record.POS - 1
+         # having multiple records for a locus is not allowed for a normal vcf
+         # only a last one survives
+         # 22 46573683 rs17241878  G  C  .  .  CAF=[0.9169,0.0831];COMMON=1;G5;G5A;GNO;INT;KGPROD;KGPhase1;OTH;OTHERKG;RS=17241878;RSPOS=46573683;SAO=0;SLO;SSR=0;TPA;VC=SNV;VLD;VP=0x050110080011170116000100;WGT=1;dbSNPBuildID=123
+         # 22 46573683 rs3052750   G  C,T   .  .  CAF=[0.9169,0.0831,.];COMMON=1;G5;GNO;INT;OTH;OTHERKG;RS=3052750;RSPOS=46573683;SAO=0;SSR=0;VC=SNV;VLD;VP=0x050000080011050102000101;WGT=1;dbSNPBuildID=113
+         if index in dict_dbsnp_snp[each_record.CHROM]:
+            print("     WARNING: CHR " + each_record.CHROM + " POS: " + str(each_record.POS) + " previously added")
+         dict_dbsnp_snp[each_record.CHROM][index] = {}
+         dict_dbsnp_snp[each_record.CHROM][index][0] = each_record.alleles[0]
+         dict_dbsnp_snp[each_record.CHROM][index][1] = each_record.alleles[1:]
 
-   print "     Reading a dbsnp vcf: done\n"
+      # print the progress status
+      if (num_records % vcf_rpt_interval) == 0:
+         print "     {0:s}: {1:7d}".format(each_record.CHROM, num_records)
+         sys.stdout.flush()
+
+   # dump dict_normal_snp
+   pickle.dump(dict_dbsnp_snp, open(out_dbsnp_vcf_dump, "wb"))
+
+   print "     Number of records: {0:7d}".format(num_records)
+   print "     Number of SNPs   : {0:7d}".format(num_snps)
+   print "     dbSNP vcf dump file: " + out_dbsnp_vcf_dump
+   print "     Reading a dbSNP vcf: done\n"
+   sys.stdout.flush()
+
+
+
+#--------------------------------------------------
+# FUNCTION: load_dbsnp_vcf
+#--------------------------------------------------
+def load_dbsnp_vcf():
+   print "Loading a dbSNP vcf dump"
+   sys.stdout.flush()
+
+   global dict_dbsnp_snp
+   global out_dbsnp_vcf_dump
+
+   # load dict_dbsnp_snp
+   dict_dbsnp_snp = pickle.load(open(out_dbsnp_vcf_dump, "rb"))
+
+   print "     dbSNP vcf dump file     : " + out_dbsnp_vcf_dump
+   print "     Loading a dbSNP vcf dump: done\n"
    sys.stdout.flush()
 
 
@@ -508,6 +614,7 @@ def construct_confusion_matrix():
 
    fo_matrix.close()
 
+   print "     Output matrix file  : " + out_matrix
    print "     Constructing the confusion matrix: done\n"
    sys.stdout.flush()
 
@@ -521,7 +628,6 @@ def read_confusion_matrix():
    sys.stdout.flush()
 
    global dict_confusion_matrix
-   global out_matrix
    global max_qs
 
    # initialize a matrix
@@ -531,7 +637,7 @@ def read_confusion_matrix():
    dict_confusion_matrix["T"] = {}
 
    # write theq matrix to a file
-   fo_matrix = open(out_matrix, "r")
+   fo_matrix = open(args.m, "r")
 
    for ref_base in ("A", "C", "G", "T"):
       for called_base in ("A", "C", "G", "T"):
@@ -541,6 +647,7 @@ def read_confusion_matrix():
 
    fo_matrix.close()
 
+   print "     Matrix file: " + args.m
    print "     Reading a confusion matrix: done\n"
    sys.stdout.flush()
 
@@ -592,11 +699,19 @@ print_header()
 # parse arguments
 args = parse_args()
 
-# read an input vcf
-read_normal_vcf()
+if args.V == None:
+   # read an input vcf
+   read_normal_vcf()
+else:
+   # load an input vcf dump
+   load_normal_vcf()
 
-# read a dbsnp vcf
-read_dbsnp_vcf()
+if args.D == None:
+   # read a dbsnp vcf
+   read_dbsnp_vcf()
+else:
+   # load a dbsnp vcf dump
+   load_dbsnp_vcf()
 
 # read a given confusion matrix
 if args.m != None:
@@ -606,6 +721,6 @@ else:
    construct_confusion_matrix()
 
 # iterate an input bam
-correct_errors()
+#correct_errors()
 
 print "########################### SUCCESSFULLY COMPLETED ###########################\n"

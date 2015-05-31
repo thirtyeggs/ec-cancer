@@ -32,6 +32,7 @@ iter_size          = 1000000
 max_qs             = 80
 initial_likelihood = -1
 vcf_rpt_interval   = 10000
+max_range          = 1000
 
 # dictionary for snps
 dict_normal_snp       = {}
@@ -397,6 +398,9 @@ def correct_errors():
       # each_seq["SN"]: chromosome name
       # each_seq["LN"]: chromosome length
       if each_seq["SN"] == args.c:
+         # read a reference fasta
+         ref_seq = fo_ref_fasta.fetch(reference=each_seq["SN"], start=0, end=(each_seq["LN"] - 1))
+
          # set the number of iterations
          num_iters = int(math.ceil(each_seq["LN"] / float(iter_size)))
 
@@ -410,9 +414,6 @@ def correct_errors():
                end = each_seq["LN"] - 1;
             else:
                end = (it_count + 1) * iter_size - 1
-
-            # fetch the corresponding sequence from the reference fasta
-            ref_seq = fo_ref_fasta.fetch(reference=args.c, start=start, end=end)
 
             # fetch coverage data
             # A, index 10: array_count_coverage[0][10]
@@ -470,9 +471,20 @@ def correct_errors():
 
                            # this read was not previously written
                            # write it to the output file
-                           if (each_pileup_read.alignment.query_name not in dict_written_reads) and (each_pileup_read.alignment.query_name not in dict_written_reads_prev):
-                              fo_out_bam.write(each_pileup_read.alignment)
-                              dict_written_reads[each_pileup_read.alignment.query_name] = 1
+                           if each_pileup_read.alignment.query_name not in dict_written_reads:
+                              # it is unlikely that this read is included in dict_written_reads_prev
+                              if (ref_position - start + 1) > max_range:
+                                 fo_out_bam.write(each_pileup_read.alignment)
+                                 dict_written_reads[each_pileup_read.alignment.query_name] = 1
+                              else:
+                                 if each_pileup_read.alignment.query_name not in dict_written_reads_prev:
+                                    fo_out_bam.write(each_pileup_read.alignment)
+                                    dict_written_reads[each_pileup_read.alignment.query_name] = 1
+
+
+
+
+
                      # no snp
                      else:
                         # the base is equal to the reference base
@@ -487,11 +499,20 @@ def correct_errors():
 
 
 
+
+
+
                            # this read was not previously written
                            # write it to the output file
-                           if (each_pileup_read.alignment.query_name not in dict_written_reads) and (each_pileup_read.alignment.query_name not in dict_written_reads_prev):
-                              fo_out_bam.write(each_pileup_read.alignment)
-                              dict_written_reads[each_pileup_read.alignment.query_name] = 1
+                           if each_pileup_read.alignment.query_name not in dict_written_reads:
+                              # it is unlikely that this read is included in dict_written_reads_prev
+                              if (ref_position - start + 1) > max_range:
+                                 fo_out_bam.write(each_pileup_read.alignment)
+                                 dict_written_reads[each_pileup_read.alignment.query_name] = 1
+                              else:
+                                 if each_pileup_read.alignment.query_name not in dict_written_reads_prev:
+                                    fo_out_bam.write(each_pileup_read.alignment)
+                                    dict_written_reads[each_pileup_read.alignment.query_name] = 1
 
             # initialize dictionaries for written reads
             dict_written_reads_prev = dict_written_reads
@@ -619,7 +640,7 @@ def construct_confusion_matrix():
 # FUNCTION: read_confusion_matrix
 #--------------------------------------------------
 def read_confusion_matrix():
-   print "Reading a confusion matrix"
+   print "Loading a confusion matrix"
    sys.stdout.flush()
 
    global dict_confusion_matrix
@@ -627,8 +648,16 @@ def read_confusion_matrix():
    # load dict_confusion_matrix
    dict_confusion_matrix = pickle.load(open(args.m, "rb"))
 
+   # DEBUG
+   #sum = 0
+   #for ref in ("A", "C", "G", "T"):
+   #   for alt in ("A", "C", "G", "T"):
+   #      for index in range(0, max_qs):
+   #         sys.stdout.write(str(dict_confusion_matrix[ref][alt][index]) + ",")
+   #      print ""
+
    print "     Matrix file: " + args.m
-   print "     Reading a confusion matrix: done\n"
+   print "     Loading a confusion matrix: done\n"
    sys.stdout.flush()
 
 
@@ -701,6 +730,6 @@ else:
    construct_confusion_matrix()
 
 # iterate an input bam
-#correct_errors()
+correct_errors()
 
 print "########################### SUCCESSFULLY COMPLETED ###########################\n"

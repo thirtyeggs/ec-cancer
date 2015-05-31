@@ -604,10 +604,14 @@ def construct_confusion_matrix():
                      if (ref_position in dict_normal_snp[each_seq["SN"]]):
                         do_this_locus = False
 
+               # check whether a reference base is N
+               if ref_seq[ref_position] == "N":
+                  do_this_locus = False
+
                if do_this_locus:
                   for each_pileup_read in each_column.pileups:
-                     # check whether it is an indel site or a reference base is N
-                     if (not each_pileup_read.is_del) and (not each_pileup_read.is_refskip):
+                     # check whether it is an indel site or a base is N
+                     if (not each_pileup_read.is_del) and (not each_pileup_read.is_refskip) and (each_pileup_read.alignment.query_sequence[each_pileup_read.query_position] != "N"):
                         # ref base : ref_seq[ref_position]
                         # read base: each_pileup_read.alignment.query_sequence[each_pileup_read.query_position]
                         # qs       : each_pileup_read.alignment.query_qualities[each_pileup_read.query_position]

@@ -1,0 +1,611 @@
+#!/usr/bin/env python
+
+#--------------------------------------------------
+# import modules
+#--------------------------------------------------
+import os.path
+import sys
+import argparse
+import math
+import re
+
+# http://pyvcf.readthedocs.org/en/latest/API.html
+import vcf
+
+# http://pysam.readthedocs.org/en/latest/api.html
+import pysam
+
+
+
+#--------------------------------------------------
+# set global variables
+#--------------------------------------------------
+version            = "0.0"
+date               = "May 30, 2015"
+out_bam            = ""
+iter_size          = 1000000
+max_qs             = 80
+initial_likelihood = -1
+
+# dictionary for snps
+dict_normal_snp       = {}
+dict_dbsnp_snp        = {}
+dict_confusion_matrix = {}
+dict_complement       = {}
+
+dict_complement["A"] = "T"
+dict_complement["C"] = "G"
+dict_complement["G"] = "C"
+dict_complement["T"] = "A"
+
+
+
+#--------------------------------------------------
+# parse arguments
+#--------------------------------------------------
+def parse_args():
+   # set global variables
+   global version
+   global date
+   global out_bam
+   global out_matrix
+
+   if len(sys.argv) == 1:
+      print "USAGE: " + os.path.basename(sys.argv[0]) + " <options>"
+      print ""
+      print "------------------------------------------------------------------------------"
+      print "ARGUMENT         DESCRIPTION               MANDATORY       DEFAULT"
+      print "------------------------------------------------------------------------------"
+      print "-b  <file>       tumor bam file            Y"
+      print "-d  <file>       dbsnp vcf file            Y"
+      print "-h               print help                N"
+      print "-m  <file>       confusion matrix file     N"
+      print "-n  <file>       normal bam file           Y"
+      print "-p  <string>     output prefix             Y"
+      print "-v  <file>       normal vcf file           Y"
+      print "------------------------------------------------------------------------------"
+      print ""
+      sys.exit()
+
+   print "Parsing arguments"
+   sys.stdout.flush()
+
+   parser = argparse.ArgumentParser(description="error correction tool for normal-cancer pair alignment results")
+
+   parser.add_argument('-b',  type=str)
+   parser.add_argument('-c',  type=str)
+   parser.add_argument('-d',  type=str)
+   parser.add_argument('-m',  type=str)
+   parser.add_argument('-n',  type=str)
+   parser.add_argument('-p',  type=str)
+   parser.add_argument('-r',  type=str)
+   parser.add_argument('-v',  type=str)
+
+   args = parser.parse_args()
+
+   # check arguments
+   if args.b != None:
+      if args.b < 0:
+         sys.exit("\nERROR: Number b cannot be < 0\n")
+   else:
+      sys.exit("\nERROR: Number b is not specified\n")
+
+   if args.b == None:
+      sys.exit("\nERROR: A tumor bam file is not specified\n")
+   elif os.path.isfile(args.b) == False:
+      sys.exit("\nERROR: " + args.b + " does not exist\n")
+
+   if args.d == None:
+      sys.exit("\nERROR: A dbsnp vcf file is not specified\n")
+   elif os.path.isfile(args.d) == False:
+      sys.exit("\nERROR: " + args.d + " does not exist\n")
+
+   if args.c == None:
+      sys.exit("\nERROR: A chromosome name is not specified\n")
+
+   if args.m != None:
+      if os.path.isfile(args.m) == False:
+         sys.exit("\nERROR: " + args.m + " does not exist\n")
+
+   if args.n == None:
+      sys.exit("\nERROR: A normal bam file is not specified\n")
+   elif os.path.isfile(args.n) == False:
+      sys.exit("\nERROR: " + args.n + " does not exist\n")
+
+   if args.p == None:
+      sys.exit("\nERROR: An output file name prefix is not specified\n")
+   else:
+      out_bam    = args.p + ".no-normal.bam"
+      out_matrix = args.p + ".matrix"
+
+   if args.r == None:
+      sys.exit("\nERROR: A reference fasta file is not specified\n")
+   elif os.path.isfile(args.r) == False:
+      sys.exit("\nERROR: " + args.r + " does not exist\n")
+
+   if args.v == None:
+      sys.exit("\nERROR: A GATK vcf file is not specified\n")
+   elif os.path.isfile(args.v) == False:
+      sys.exit("\nERROR: " + args.v + " does not exist\n")
+
+   # print arguments
+   print "     Normal bam file     : " + args.n
+   print "     Tumor bam file      : " + args.b
+   print "     Normal vcf file     : " + args.v
+   print "     dbSNP vcf file      : " + args.d
+   print "     Reference fasta file: " + args.r
+   print "     Output bam file     : " + out_bam
+   print "     Chromosome          : " + args.c
+
+   print "     Parsing arguments: done\n"
+   sys.stdout.flush()
+
+   return args
+
+
+
+#--------------------------------------------------
+# FUNCTION: is_exe
+#--------------------------------------------------
+def is_exe(program):
+   return os.path.isfile(program) and os.access(program, os.X_OK)
+
+
+
+#--------------------------------------------------
+# FUNCTION: which
+#--------------------------------------------------
+def which(program):
+   fpath, fname = os.path.split(program)
+
+   if fpath:
+      if is_exe(program):
+         return program
+   else:
+      for path in os.environ['PATH'].split(os.pathsep):
+         path = path.strip('"')
+         exe_file = os.path.join(path, program)
+         if is_exe(exe_file):
+            return exe_file
+
+   return None
+
+
+
+#--------------------------------------------------
+# FUNCTION: print_header
+#--------------------------------------------------
+def print_header():
+   global version
+   global date
+
+   print ""
+   print "------------------------------------------------------------------------------"
+   print "AUTHOR : Yun Heo"
+   print "VERSION: " + version
+   print "DATE   : " + date
+   print "------------------------------------------------------------------------------"
+   print ""
+   sys.stdout.flush()
+
+
+
+#--------------------------------------------------
+# FUNCTION: read_normal_vcf
+#--------------------------------------------------
+def read_normal_vcf():
+   print "Reading a normal vcf"
+   sys.stdout.flush()
+
+   global dict_normal_snp;
+
+   fo_vcf = vcf.Reader(open(args.v, "r"))
+
+   for each_record in fo_vcf:
+      if each_record.is_snp:
+         # check the chromosome name
+         if each_record.CHROM == args.c:
+            # each_record.CHROM was not previously added to dict_normal_snp
+            if each_record.CHROM not in dict_normal_snp:
+               dict_normal_snp[each_record.CHROM] = {};
+
+            # snps in the position already exist in the dictionary
+            # POS: 1-based (numbers in the vcf file)
+            # ths position is converted to a 0-based number
+            index = each_record.POS - 1
+            if index in dict_normal_snp[each_record.CHROM]:
+               sys.exit("\nERROR: CHR " + each_record.CHROM + " POS: " + each_record.POS + " previously added\n")
+            else:
+               dict_normal_snp[each_record.CHROM][index] = {}
+               dict_normal_snp[each_record.CHROM][index][0] = each_record.alleles[0]
+               dict_normal_snp[each_record.CHROM][index][1] = each_record.alleles[1:]
+
+   print "     Reading a normal vcf: done\n"
+   sys.stdout.flush()
+
+
+
+#--------------------------------------------------
+# FUNCTION: read_dbsnp_vcf
+#--------------------------------------------------
+def read_dbsnp_vcf():
+   print "Reading a dbsnp vcf"
+
+   global dict_dbsnp_snp;
+
+   fo_vcf = vcf.Reader(open(args.d, "r"))
+
+   for each_record in fo_vcf:
+      if each_record.is_snp:
+         # if you want to gather information from a specific chromosome
+         # add this
+         #if each_record.CHROM == args.c:
+            # each_record.CHROM was not previously added to dict_dbsnp_snp
+            if each_record.CHROM not in dict_dbsnp_snp:
+               dict_dbsnp_snp[each_record.CHROM] = {};
+
+            # snps in the position already exist in the dictionary
+            # POS: 1-based (numbers in the vcf file)
+            # ths position is converted to a 0-based number
+            index = each_record.POS - 1
+            if index in dict_dbsnp_snp[each_record.CHROM]:
+               sys.exit("\nERROR: CHR " + each_record.CHROM + " POS: " + each_record.POS + " previously added\n")
+            else:
+               dict_dbsnp_snp[each_record.CHROM][index] = {}
+               dict_dbsnp_snp[each_record.CHROM][index][0] = each_record.alleles[0]
+               dict_dbsnp_snp[each_record.CHROM][index][1] = each_record.alleles[1:]
+
+   print "     Reading a dbsnp vcf: done\n"
+   sys.stdout.flush()
+
+
+
+#--------------------------------------------------
+# FUNCTION: correct_errors
+#--------------------------------------------------
+def correct_errors():
+   print "Correct errros"
+   sys.stdout.flush()
+
+   global out_bam
+   global iter_size
+   global dict_normal_snp
+   global initial_likelihood
+
+   fo_normal_bam = pysam.Samfile(args.b, "rb")
+   fo_ref_fasta = pysam.FastaFile(args.r)
+   fo_out_bam   = pysam.AlignmentFile(out_bam, "wb", template=fo_normal_bam)
+
+   dict_header             = fo_normal_bam.header
+   dict_written_reads      = {}
+   dict_written_reads_prev = {}
+
+   list_likelihood = [-1] * 4
+
+   # iterate chromosomes
+   for each_seq in dict_header["SQ"]:
+      # target chromosome
+      # each_seq["SN"]: chromosome name
+      # each_seq["LN"]: chromosome length
+      if each_seq["SN"] == args.c:
+         # set the number of iterations
+         num_iters = int(math.ceil(each_seq["LN"] / float(iter_size)))
+
+         # iterate each chunk
+         # range does not include the right number
+         for it_count in range(0, num_iters):
+            # calculate the start/end indices
+            start = it_count * iter_size
+
+            if it_count == (num_iters - 1):
+               end = each_seq["LN"] - 1;
+            else:
+               end = (it_count + 1) * iter_size - 1
+
+            # fetch the corresponding sequence from the reference fasta
+            ref_seq = fo_ref_fasta.fetch(reference=args.c, start=start, end=end)
+
+            # fetch coverage data
+            # A, index 10: array_count_coverage[0][10]
+            # C, index 10: array_count_coverage[1][10]
+            # G, index 10: array_count_coverage[2][10]
+            # T, index 10: array_count_coverage[3][10]
+            #array_count_coverage = fo_normal_bam.count_coverage(each_seq["SN"], start, end, quality_threshold = 0)
+
+            # iterate each column
+            # start/end: 0-based
+            for each_column in fo_normal_bam.pileup(each_seq["SN"], start, end):
+               # position in the reference (0-based)
+               ref_position = each_column.reference_pos
+
+               # initialize the likelihood list
+               for it_likelihood in range(0, 4):
+                  list_likelihood[it_likelihood] = initial_likelihood
+
+               # iterate each read
+               for each_pileup_read in each_column.pileups:
+                  # check whether it is an indel site or a reference base is N
+                  if (not each_pileup_read.is_del) and (not each_pileup_read.is_refskip):
+                     # check whether this locus exists in the normal vcf file
+                     use_normal_snp = False
+                     if each_seq["SN"] in dict_normal_snp:
+                        if ref_position in dict_normal_snp[each_seq["SN"]]:
+                           use_normal_snp = True
+
+                     # a snp exist in this locus
+                     if use_normal_snp:
+                        # check the vcf information
+                        # dict_normal_snp[each_seq["SN"]][ref_position][0]: reference
+                        if dict_normal_snp[each_seq["SN"]][ref_position][0] != ref_seq[ref_position]:
+                           sys.exit("\nERROR: VCF mismatch: " + ref_seq[ref_position] + " vs " + dict_normal_snp[each_seq["SN"]][ref_position][0] + "\n")
+
+                        # dict_normal_snp[each_seq["SN"]][ref_position][1]: alternative alleles
+                        match = False
+                        for each_allele in dict_normal_snp[each_seq["SN"]][ref_position][1]:
+                           # the base is equal to the reference base
+                           # this read comes from the normal sample: not needed
+                           if each_pileup_read.alignment.query_sequence[each_pileup_read.query_position] == each_allele:
+                              match = True
+                              break
+
+                        # the base in the read is not matched with any reference base
+                        if match == False:
+                           #e = 10 ** (-1 * each_pileup_read.alignment.query_qualities[each_pileup_read.query_position] / 10.0)
+
+
+
+
+
+
+
+
+                           # this read was not previously written
+                           # write it to the output file
+                           if (each_pileup_read.alignment.query_name not in dict_written_reads) and (each_pileup_read.alignment.query_name not in dict_written_reads_prev):
+                              fo_out_bam.write(each_pileup_read.alignment)
+                              dict_written_reads[each_pileup_read.alignment.query_name] = 1
+                     # no snp
+                     else:
+                        # the base is equal to the reference base
+                        # each base: each_pileup_read.alignment.query_sequence[each_pileup_read.query_position]
+                        # each qs  : each_pileup_read.alignment.query_qualities[each_pileup_read.query_position]
+                        # subtracting 33 from query_qualities is not needed
+                        # but what happens for the offset 64?
+                        if each_pileup_read.alignment.query_sequence[each_pileup_read.query_position] != ref_seq[ref_position]:
+                           #e = 10 ** (-1 * each_pileup_read.alignment.query_qualities[each_pileup_read.query_position] / 10.0)
+
+
+
+
+
+                           # this read was not previously written
+                           # write it to the output file
+                           if (each_pileup_read.alignment.query_name not in dict_written_reads) and (each_pileup_read.alignment.query_name not in dict_written_reads_prev):
+                              fo_out_bam.write(each_pileup_read.alignment)
+                              dict_written_reads[each_pileup_read.alignment.query_name] = 1
+
+            # initialize dictionaries for written reads
+            dict_written_reads_prev = dict_written_reads
+            dict_written_reads      = {}
+
+            # print the progress status
+            print "     {0:s}: {1:4d} out of {2:4d}".format(each_seq["SN"], it_count + 1, num_iters)
+            sys.stdout.flush()
+
+   fo_normal_bam.close()
+   fo_ref_fasta.close()
+   fo_out_bam.close()
+
+   print "     Correct errors: done\n"
+   sys.stdout.flush()
+
+
+
+#--------------------------------------------------
+# FUNCTION: construct_confusion_matrix
+#--------------------------------------------------
+def construct_confusion_matrix():
+   print "Constructing the confusion matrix"
+   sys.stdout.flush()
+
+   global dict_confusion_matrix
+   global dict_normal_snp
+   global dict_dbsnp_snp
+   global out_matrix
+   global max_qs
+
+   # initialize the confusion matrix
+   initialize_confusion_matrix()
+
+   # open files
+   fo_normal_bam = pysam.Samfile(args.n, "rb")
+   fo_ref_fasta = pysam.FastaFile(args.r)
+
+   # get the header of a normal bam file
+   dict_header = fo_normal_bam.header
+
+   # iterate chromosomes
+   for each_seq in dict_header["SQ"]:
+      # if you want to gather information from a specific chromosome
+      # add this following command
+      # each_seq["SN"]: chromosome name
+      # each_seq["LN"]: chromosome length
+      #if each_seq["SN"] == args.c:
+         # set the number of iterations
+         num_iters = int(math.ceil(each_seq["LN"] / float(iter_size)))
+
+         # fetch the corresponding sequence from the reference fasta
+         ref_seq = fo_ref_fasta.fetch(reference=each_seq["SN"], start=0, end=(each_seq["LN"] - 1))
+
+         # iterate each chunk
+         # range does not include the right number
+         for it_count in range(0, num_iters):
+            # calculate the start/end indices
+            start = it_count * iter_size
+
+            if it_count == (num_iters - 1):
+               end = each_seq["LN"] - 1;
+            else:
+               end = (it_count + 1) * iter_size - 1
+
+            # fetch coverage data
+            # using this if quality scores are not used
+            # A, index 10: array_count_coverage[0][10]
+            # C, index 10: array_count_coverage[1][10]
+            # G, index 10: array_count_coverage[2][10]
+            # T, index 10: array_count_coverage[3][10]
+            #array_count_coverage = fo_normal_bam.count_coverage(each_seq["SN"], start, end, quality_threshold = 0)
+
+            # iterate each column
+            # start/end: 0-based
+            for each_column in fo_normal_bam.pileup(each_seq["SN"], start, end):
+               # position in the reference (0-based)
+               ref_position = each_column.reference_pos
+
+               # check whether this locus is in the dbsnp vcf file
+               do_this_locus = True
+               if (each_seq["SN"] in dict_dbsnp_snp):
+                  if (ref_position in dict_dbsnp_snp[each_seq["SN"]]):
+                     do_this_locus = False
+
+               # check whether this locus is in the normal vcf file
+               if not do_this_locus:
+                  if (each_seq["SN"] in dict_normal_snp):
+                     if (ref_position in dict_normal_snp[each_seq["SN"]]):
+                        do_this_locus = False
+
+               if do_this_locus:
+                  for each_pileup_read in each_column.pileups:
+                     # check whether it is an indel site or a reference base is N
+                     if (not each_pileup_read.is_del) and (not each_pileup_read.is_refskip):
+                        # ref base : ref_seq[ref_position]
+                        # read base: each_pileup_read.alignment.query_sequence[each_pileup_read.query_position]
+                        # qs       : each_pileup_read.alignment.query_qualities[each_pileup_read.query_position]
+                        # subtracting 33 from query_qualities is not needed
+                        # but what happens for the offset 64?
+                        # aligned to the reverse strand
+                        if each_pileup_read.alignment.is_reverse:
+                           dict_confusion_matrix[dict_complement[ref_seq[ref_position]]][dict_complement[each_pileup_read.alignment.query_sequence[each_pileup_read.query_position]]][each_pileup_read.alignment.query_qualities[each_pileup_read.query_position]] += 1
+                        # aligned to the forward strand
+                        else:
+                           dict_confusion_matrix[ref_seq[ref_position]][each_pileup_read.alignment.query_sequence[each_pileup_read.query_position]][each_pileup_read.alignment.query_qualities[each_pileup_read.query_position]] += 1
+
+            # print the progress status
+            print "     {0:s}: {1:4d} out of {2:4d}".format(each_seq["SN"], it_count + 1, num_iters)
+            sys.stdout.flush()
+
+   fo_normal_bam.close()
+   fo_ref_fasta.close()
+
+   # write theq matrix to a file
+   fo_matrix = open(out_matrix, "w")
+
+   for ref_base in ("A", "C", "G", "T"):
+      for called_base in ("A", "C", "G", "T"):
+         for index in range(0, max_qs):
+            fo_matrix.write(str(dict_confusion_matrix[ref_base][called_base][index]) + ",")
+         fo_matrix.write("\n")
+
+   fo_matrix.close()
+
+   print "     Constructing the confusion matrix: done\n"
+   sys.stdout.flush()
+
+
+
+#--------------------------------------------------
+# FUNCTION: read_confusion_matrix
+#--------------------------------------------------
+def read_confusion_matrix():
+   print "Reading a confusion matrix"
+   sys.stdout.flush()
+
+   global dict_confusion_matrix
+   global out_matrix
+   global max_qs
+
+   # initialize a matrix
+   dict_confusion_matrix["A"] = {}
+   dict_confusion_matrix["C"] = {}
+   dict_confusion_matrix["G"] = {}
+   dict_confusion_matrix["T"] = {}
+
+   # write theq matrix to a file
+   fo_matrix = open(out_matrix, "r")
+
+   for ref_base in ("A", "C", "G", "T"):
+      for called_base in ("A", "C", "G", "T"):
+         matrix_row = fo_matrix.readline()
+         matrix_row = re.sub(",\s*$", "", matrix_row)
+         dict_confusion_matrix[ref_base][called_base] = map(int, matrix_row.split(","))
+
+   fo_matrix.close()
+
+   print "     Reading a confusion matrix: done\n"
+   sys.stdout.flush()
+
+
+
+#--------------------------------------------------
+# FUNCTION: initialize_confusion_matrix
+#--------------------------------------------------
+def initialize_confusion_matrix():
+   global dict_confusion_matrix
+   global max_qs
+
+   # initialize the confusion matrix
+   # 1st level
+   dict_confusion_matrix["A"] = {}
+   dict_confusion_matrix["C"] = {}
+   dict_confusion_matrix["G"] = {}
+   dict_confusion_matrix["T"] = {}
+
+   # 2nd level
+   dict_confusion_matrix["A"]["A"] = [0] * max_qs
+   dict_confusion_matrix["A"]["C"] = [0] * max_qs
+   dict_confusion_matrix["A"]["G"] = [0] * max_qs
+   dict_confusion_matrix["A"]["T"] = [0] * max_qs
+
+   dict_confusion_matrix["C"]["A"] = [0] * max_qs
+   dict_confusion_matrix["C"]["C"] = [0] * max_qs
+   dict_confusion_matrix["C"]["G"] = [0] * max_qs
+   dict_confusion_matrix["C"]["T"] = [0] * max_qs
+
+   dict_confusion_matrix["G"]["A"] = [0] * max_qs
+   dict_confusion_matrix["G"]["C"] = [0] * max_qs
+   dict_confusion_matrix["G"]["G"] = [0] * max_qs
+   dict_confusion_matrix["G"]["T"] = [0] * max_qs
+
+   dict_confusion_matrix["T"]["A"] = [0] * max_qs
+   dict_confusion_matrix["T"]["C"] = [0] * max_qs
+   dict_confusion_matrix["T"]["G"] = [0] * max_qs
+   dict_confusion_matrix["T"]["T"] = [0] * max_qs
+
+
+
+#--------------------------------------------------
+# FUNCTION: main
+#--------------------------------------------------
+# print header
+print_header()
+
+# parse arguments
+args = parse_args()
+
+# read an input vcf
+read_normal_vcf()
+
+# read a dbsnp vcf
+read_dbsnp_vcf()
+
+# read a given confusion matrix
+if args.m != None:
+   read_confusion_matrix()
+# construct a confusion matrix
+else:
+   construct_confusion_matrix()
+
+# iterate an input bam
+correct_errors()
+
+print "########################### SUCCESSFULLY COMPLETED ###########################\n"

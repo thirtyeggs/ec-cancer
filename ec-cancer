@@ -67,6 +67,7 @@ def parse_args():
       print "ARGUMENT         DESCRIPTION               MANDATORY       DEFAULT"
       print "------------------------------------------------------------------------------"
       print "-b  <file>       tumor bam file            Y"
+      print "-c  <string>     chromosome name           Y"
       print "-D  <file>       dbsnp vcf dump file       N"
       print "-d  <file>       dbsnp vcf file            N"
       print "-h               print help                N"

@@ -27,7 +27,7 @@ import pysam
 # set global variables
 #--------------------------------------------------
 version            = "0.0"
-date               = "May 30, 2015"
+date               = "May 31, 2015"
 iter_size          = 1000000
 max_qs             = 80
 initial_likelihood = -1
@@ -56,6 +56,7 @@ def parse_args():
    global date
    global out_bam
    global out_matrix
+   global out_matrix_dump
    global out_normal_vcf_dump
    global out_dbsnp_vcf_dump
 
@@ -137,6 +138,7 @@ def parse_args():
    else:
       out_bam             = args.p + ".no-normal.bam"
       out_matrix          = args.p + ".matrix"
+      out_matrix_dump     = args.p + ".matrix.dump"
       out_normal_vcf_dump = args.p + ".normal-vcf.dump"
       out_dbsnp_vcf_dump  = args.p + ".dbsnp-vcf.dump"
 
@@ -542,6 +544,7 @@ def construct_confusion_matrix():
    global dict_normal_snp
    global dict_dbsnp_snp
    global out_matrix
+   global out_matrix_dump
    global max_qs
 
    # initialize the confusion matrix
@@ -631,10 +634,20 @@ def construct_confusion_matrix():
    fo_normal_bam.close()
    fo_ref_fasta.close()
 
-   # dump dict_confusion_matrix
-   pickle.dump(dict_confusion_matrix, open(out_matrix, "wb"))
+   # write dict_confusion_matrix (readable)
+   f_matrix = open(out_matrix, "w")
+   for ref in ("A", "C", "G", "T"):
+      for alt in ("A", "C", "G", "T"):
+         for index in range(0, max_qs):
+            f_matrix.write(str(dict_confusion_matrix[ref][alt][index]) + ",")
+         f_matrix.write("\n")
+   f_matrix.close()
 
-   print "     Output matrix file  : " + out_matrix
+   # dump dict_confusion_matrix
+   pickle.dump(dict_confusion_matrix, open(out_matrix_dump, "wb"))
+
+   print "     Output matrix file (readable): " + out_matrix
+   print "     Output matrix dump file      : " + out_matrix_dump
    print "     Constructing the confusion matrix: done\n"
    sys.stdout.flush()
 
@@ -734,6 +747,6 @@ else:
    construct_confusion_matrix()
 
 # iterate an input bam
-correct_errors()
+#correct_errors()
 
 print "########################### SUCCESSFULLY COMPLETED ###########################\n"

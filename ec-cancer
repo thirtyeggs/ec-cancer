@@ -74,6 +74,7 @@ def parse_args():
       print "-m  <file>       confusion matrix file     N"
       print "-n  <file>       normal bam file           Y"
       print "-p  <string>     output prefix             Y"
+      print "-r  <string>     reference fasta file      Y"
       print "-V  <file>       normal vcf dump file      N"
       print "-v  <file>       normal vcf file           N"
       print "------------------------------------------------------------------------------"

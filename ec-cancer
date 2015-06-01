@@ -406,6 +406,10 @@ def correct_errors():
          # set the number of iterations
          num_iters = int(math.ceil(each_seq["LN"] / float(iter_size)))
 
+         # DEBUG
+         if each_seq["SN"] == "22":
+            num_iters = 17
+
          # iterate each chunk
          # range does not include the right number
          for it_count in range(0, num_iters):
@@ -430,91 +434,96 @@ def correct_errors():
                # position in the reference (0-based)
                ref_position = each_column.reference_pos
 
-               # initialize the likelihood list
-               for it_likelihood in range(0, 4):
-                  list_likelihood[it_likelihood] = initial_likelihood
+               # a reference base is not N
+               if ref_seq[ref_position] != "N":
+                  # DEBUG
+                  if ref_position < 16320000:
+                     # DEBUG
+                     print "R: " + str(ref_position)
 
-               # iterate each read
-               for each_pileup_read in each_column.pileups:
-                  # check whether it is an indel site or a reference base is N
-                  if (not each_pileup_read.is_del) and (not each_pileup_read.is_refskip):
-                     # check whether this locus exists in the normal vcf file
-                     use_normal_snp = False
-                     if each_seq["SN"] in dict_normal_snp:
-                        if ref_position in dict_normal_snp[each_seq["SN"]]:
-                           use_normal_snp = True
+                     # initialize the likelihood list
+                     for it_likelihood in range(0, 4):
+                        list_likelihood[it_likelihood] = initial_likelihood
 
-                     # a snp exist in this locus
-                     if use_normal_snp:
-                        # check the vcf information
-                        # dict_normal_snp[each_seq["SN"]][ref_position][0]: reference
-                        if dict_normal_snp[each_seq["SN"]][ref_position][0] != ref_seq[ref_position]:
-                           sys.exit("\nERROR: VCF mismatch: " + ref_seq[ref_position] + " vs " + dict_normal_snp[each_seq["SN"]][ref_position][0] + "\n")
+                     # iterate each read
+                     for each_pileup_read in each_column.pileups:
+                        # check whether it is an indel site or a reference base is N
+                        if (not each_pileup_read.is_del) and (not each_pileup_read.is_refskip):
+                           # check whether this locus exists in the normal vcf file
+                           use_normal_snp = False
+                           if each_seq["SN"] in dict_normal_snp:
+                              if ref_position in dict_normal_snp[each_seq["SN"]]:
+                                 use_normal_snp = True
 
-                        # dict_normal_snp[each_seq["SN"]][ref_position][1]: alternative alleles
-                        match = False
-                        for each_allele in dict_normal_snp[each_seq["SN"]][ref_position][1]:
-                           # the base is equal to the reference base
-                           # this read comes from the normal sample: not needed
-                           if each_pileup_read.alignment.query_sequence[each_pileup_read.query_position] == each_allele:
-                              match = True
-                              break
+                           # a snp exist in this locus
+                           if use_normal_snp:
+                              # check the vcf information
+                              # dict_normal_snp[each_seq["SN"]][ref_position][0]: reference
+                              if dict_normal_snp[each_seq["SN"]][ref_position][0] != ref_seq[ref_position]:
+                                 sys.exit("\nERROR: VCF mismatch: " + ref_seq[ref_position] + " vs " + dict_normal_snp[each_seq["SN"]][ref_position][0] + "\n")
 
-                        # the base in the read is not matched with any reference base
-                        if match == False:
-                           #e = 10 ** (-1 * each_pileup_read.alignment.query_qualities[each_pileup_read.query_position] / 10.0)
+                              # dict_normal_snp[each_seq["SN"]][ref_position][1]: alternative alleles
+                              match = False
+                              for each_allele in dict_normal_snp[each_seq["SN"]][ref_position][1]:
+                                 # the base is equal to the reference base
+                                 # this read comes from the normal sample: not needed
+                                 if each_pileup_read.alignment.query_sequence[each_pileup_read.query_position] == each_allele:
+                                    match = True
+                                    break
 
+                              # the base in the read is not matched with any reference base
+                              if match == False:
+                                 #e = 10 ** (-1 * each_pileup_read.alignment.query_qualities[each_pileup_read.query_position] / 10.0)
 
+                                 # this read was not previously written
+                                 # write it to the output file
+                                 if each_pileup_read.alignment.query_name not in dict_written_reads:
+                                    # it is unlikely that this read is included in dict_written_reads_prev
+                                    if (ref_position - start + 1) > max_range:
+                                       # DEBUG
+                                       print "     " + each_pileup_read.alignment.query_name + ", " + each_pileup_read.alignment.query_sequence[each_pileup_read.query_position] + " at " + str(each_pileup_read.query_position)
+                                       sys.stdout.flush()
 
+                                       fo_out_bam.write(each_pileup_read.alignment)
+                                       dict_written_reads[each_pileup_read.alignment.query_name] = 1
+                                    else:
+                                       if each_pileup_read.alignment.query_name not in dict_written_reads_prev:
+                                          # DEBUG
+                                          print "     " + each_pileup_read.alignment.query_name + ", " + each_pileup_read.alignment.query_sequence[each_pileup_read.query_position] + " at " + str(each_pileup_read.query_position)
+                                          sys.stdout.flush()
 
+                                          fo_out_bam.write(each_pileup_read.alignment)
+                                          dict_written_reads[each_pileup_read.alignment.query_name] = 1
 
+                           # no snp
+                           else:
+                              # the base is equal to the reference base
+                              # each base: each_pileup_read.alignment.query_sequence[each_pileup_read.query_position]
+                              # each qs  : each_pileup_read.alignment.query_qualities[each_pileup_read.query_position]
+                              # subtracting 33 from query_qualities is not needed
+                              # but what happens for the offset 64?
+                              if each_pileup_read.alignment.query_sequence[each_pileup_read.query_position] != ref_seq[ref_position]:
+                                 #e = 10 ** (-1 * each_pileup_read.alignment.query_qualities[each_pileup_read.query_position] / 10.0)
 
+                                 # this read was not previously written
+                                 # write it to the output file
+                                 if each_pileup_read.alignment.query_name not in dict_written_reads:
+                                    # it is unlikely that this read is included in dict_written_reads_prev
+                                    if (ref_position - start + 1) > max_range:
+                                       # DEBUG
+                                       print "     " + each_pileup_read.alignment.query_name + ", " + each_pileup_read.alignment.query_sequence[each_pileup_read.query_position] + " at " + str(each_pileup_read.query_position)
+                                       sys.stdout.flush()
 
+                                       fo_out_bam.write(each_pileup_read.alignment)
+                                       dict_written_reads[each_pileup_read.alignment.query_name] = 1
+                                    else:
+                                       if each_pileup_read.alignment.query_name not in dict_written_reads_prev:
+                                          # DEBUG
+                                          print "     " + each_pileup_read.alignment.query_name + ", " + each_pileup_read.alignment.query_sequence[each_pileup_read.query_position] + " at " + str(each_pileup_read.query_position)
+                                          sys.stdout.flush()
 
-                           # this read was not previously written
-                           # write it to the output file
-                           if each_pileup_read.alignment.query_name not in dict_written_reads:
-                              # it is unlikely that this read is included in dict_written_reads_prev
-                              if (ref_position - start + 1) > max_range:
-                                 fo_out_bam.write(each_pileup_read.alignment)
-                                 dict_written_reads[each_pileup_read.alignment.query_name] = 1
-                              else:
-                                 if each_pileup_read.alignment.query_name not in dict_written_reads_prev:
-                                    fo_out_bam.write(each_pileup_read.alignment)
-                                    dict_written_reads[each_pileup_read.alignment.query_name] = 1
-
-
-
-
-
-                     # no snp
-                     else:
-                        # the base is equal to the reference base
-                        # each base: each_pileup_read.alignment.query_sequence[each_pileup_read.query_position]
-                        # each qs  : each_pileup_read.alignment.query_qualities[each_pileup_read.query_position]
-                        # subtracting 33 from query_qualities is not needed
-                        # but what happens for the offset 64?
-                        if each_pileup_read.alignment.query_sequence[each_pileup_read.query_position] != ref_seq[ref_position]:
-                           #e = 10 ** (-1 * each_pileup_read.alignment.query_qualities[each_pileup_read.query_position] / 10.0)
-
-
-
-
-
-
-
-
-                           # this read was not previously written
-                           # write it to the output file
-                           if each_pileup_read.alignment.query_name not in dict_written_reads:
-                              # it is unlikely that this read is included in dict_written_reads_prev
-                              if (ref_position - start + 1) > max_range:
-                                 fo_out_bam.write(each_pileup_read.alignment)
-                                 dict_written_reads[each_pileup_read.alignment.query_name] = 1
-                              else:
-                                 if each_pileup_read.alignment.query_name not in dict_written_reads_prev:
-                                    fo_out_bam.write(each_pileup_read.alignment)
-                                    dict_written_reads[each_pileup_read.alignment.query_name] = 1
+                                          fo_out_bam.write(each_pileup_read.alignment)
+                                          dict_written_reads[each_pileup_read.alignment.query_name] = 1
 
             # initialize dictionaries for written reads
             dict_written_reads_prev = dict_written_reads
@@ -665,14 +674,6 @@ def read_confusion_matrix():
    # load dict_confusion_matrix
    dict_confusion_matrix = pickle.load(open(args.m, "rb"))
 
-   # DEBUG
-   #sum = 0
-   #for ref in ("A", "C", "G", "T"):
-   #   for alt in ("A", "C", "G", "T"):
-   #      for index in range(0, max_qs):
-   #         sys.stdout.write(str(dict_confusion_matrix[ref][alt][index]) + ",")
-   #      print ""
-
    print "     Matrix file: " + args.m
    print "     Loading a confusion matrix: done\n"
    sys.stdout.flush()
@@ -747,6 +748,6 @@ else:
    construct_confusion_matrix()
 
 # iterate an input bam
-#correct_errors()
+correct_errors()
 
 print "########################### SUCCESSFULLY COMPLETED ###########################\n"

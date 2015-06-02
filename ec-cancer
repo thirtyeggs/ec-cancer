@@ -526,7 +526,7 @@ def correct_errors():
                                        if dict_coverage[current_base] >= min_cov:
                                           # DEBUG
                                           #print ("     {0:10d} {1:s} in {2:s}".format(ref_position, current_base, each_pileup_read.alignment.query_name))
-                                          sys.stdout.flush()
+                                          #sys.stdout.flush()
 
                                           fo_out_bam.write(each_pileup_read.alignment)
                                           dict_written_reads[each_pileup_read.alignment.query_name] = 1
@@ -536,7 +536,7 @@ def correct_errors():
                                           if dict_coverage[current_base] >= min_cov:
                                              # DEBUG
                                              #print ("     {0:10d} {1:s} in {2:s}".format(ref_position, current_base, each_pileup_read.alignment.query_name))
-                                             sys.stdout.flush()
+                                             #sys.stdout.flush()
 
                                              fo_out_bam.write(each_pileup_read.alignment)
                                              dict_written_reads[each_pileup_read.alignment.query_name] = 1
@@ -557,20 +557,20 @@ def correct_errors():
                                     # it is unlikely that this read is included in dict_written_reads_prev
                                     if (ref_position - start + 1) > max_range:
                                        # this base exists multiple times
-                                       if dict_coverage[current_base] != min_cov:
+                                       if dict_coverage[current_base] >= min_cov:
                                           # DEBUG
                                           #print ("     {0:10d} {1:s} in {2:s}".format(ref_position, current_base, each_pileup_read.alignment.query_name))
-                                          sys.stdout.flush()
+                                          #sys.stdout.flush()
 
                                           fo_out_bam.write(each_pileup_read.alignment)
                                           dict_written_reads[each_pileup_read.alignment.query_name] = 1
                                     else:
                                        if each_pileup_read.alignment.query_name not in dict_written_reads_prev:
                                           # this base exists multiple times
-                                          if dict_coverage[current_base] != min_cov:
+                                          if dict_coverage[current_base] >= min_cov:
                                              # DEBUG
                                              #print ("     {0:10d} {1:s} in {2:s}".format(ref_position, current_base, each_pileup_read.alignment.query_name))
-                                             sys.stdout.flush()
+                                             #sys.stdout.flush()
 
                                              fo_out_bam.write(each_pileup_read.alignment)
                                              dict_written_reads[each_pileup_read.alignment.query_name] = 1

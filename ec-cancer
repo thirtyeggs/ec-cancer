@@ -793,12 +793,12 @@ else:
    # load a dbsnp vcf dump
    load_dbsnp_vcf()
 
-# read a given confusion matrix
-if args.m != None:
-   read_confusion_matrix()
-# construct a confusion matrix
-else:
-   construct_confusion_matrix()
+## read a given confusion matrix
+#if args.m != None:
+#   read_confusion_matrix()
+## construct a confusion matrix
+#else:
+#   construct_confusion_matrix()
 
 # iterate an input bam
 correct_errors()

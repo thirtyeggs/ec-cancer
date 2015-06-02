@@ -408,9 +408,6 @@ def correct_errors():
    global initial_likelihood
    global min_cov
 
-   # DEBUG
-   print min_cov
-
    fo_normal_bam = pysam.Samfile(args.b, "rb")
    fo_ref_fasta = pysam.FastaFile(args.r)
    fo_out_bam   = pysam.AlignmentFile(out_bam, "wb", template=fo_normal_bam)
